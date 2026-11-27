@@ -45,13 +45,22 @@ jobs:
           workspaces: "./ -> target"
           cache-on-failure: true
 
+      # `pnpm tauri build` 在 Windows 上会经 cmd.exe 重新拼命令行，内联 JSON 的双引号会被吃掉，
+      # 所以把覆盖配置写成文件，只传路径。
+      - name: Write unsigned Tauri config override
+        shell: pwsh
+        run: >-
+          Set-Content -Path "$env:RUNNER_TEMP\tauri.fork-unsigned.conf.json"
+          -Value '{"bundle":{"createUpdaterArtifacts":false}}'
+          -Encoding utf8 -NoNewline
+
       - name: Build Tauri app (unsigned, no updater artifacts)
         shell: pwsh
         run: >-
           pnpm tauri build
           --target x86_64-pc-windows-msvc
           --bundles nsis
-          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          --config "$env:RUNNER_TEMP\tauri.fork-unsigned.conf.json"
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
