@@ -1,0 +1,61 @@
+# 个人 fork 专用的 Windows 安装包构建流程（不要提交给上游 t8y2/dbx）。
+#
+# 用法：
+#   1. 把本文件复制到 fork 仓库的 .github/workflows/fork-build-windows.yml 并推送；
+#   2. 在 GitHub 仓库页 Actions -> "Fork build (Windows x64)" -> Run workflow；
+#   3. 跑完后在该次运行页面底部的 Artifacts 下载 dbx-windows-x64-setup。
+#
+# 与上游 release.yml 的区别：不签名、不生成更新器产物、不发 Release，只上传构建产物。
+
+name: Fork build (Windows x64)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    env:
+      CARGO_INCREMENTAL: "0"
+      # 与上游一致：Windows 可执行文件保留 8 MiB 栈。
+      RUSTFLAGS: -C link-arg=/STACK:8388608
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.34.7
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./ -> target"
+          cache-on-failure: true
+
+      - name: Build Tauri app (unsigned, no updater artifacts)
+        shell: pwsh
+        run: >-
+          pnpm tauri build
+          --target x86_64-pc-windows-msvc
+          --bundles nsis
+          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbx-windows-x64-setup
+          path: target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          if-no-files-found: error
