@@ -1,0 +1,86 @@
+# 个人 fork 专用的 macOS 安装包构建流程（不要提交给上游 t8y2/dbx）。
+#
+# 用法：Actions -> "Fork build (macOS)" -> Run workflow -> 选分支；
+#       跑完后在该次运行页面底部的 Artifacts 下载 dbx-macos-arm64-dmg / dbx-macos-x64-dmg。
+#
+# 与上游 release.yml 的区别：没有 Apple 开发者证书，只做临时签名（ad-hoc），不公证，
+# 不生成更新器产物，不发 Release，只上传构建产物。
+#
+# 没有公证意味着 Gatekeeper 仍会拦截首次启动：在"系统设置 -> 隐私与安全性"里点"仍要打开"，
+# 或者对本文件执行 xattr -d com.apple.quarantine。
+
+name: Fork build (macOS)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: build-macos (${{ matrix.target }})
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            arch: arm64
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+    env:
+      CARGO_INCREMENTAL: "0"
+      # "-" 是 ad-hoc 临时签名：没有开发者证书时 Tauri 的标准做法。
+      APPLE_SIGNING_IDENTITY: "-"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.34.7
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./ -> target"
+          cache-on-failure: true
+
+      - name: Write Tauri config override
+        shell: bash
+        run: >
+          printf '%s' '{"bundle":{"createUpdaterArtifacts":false}}'
+          > "$RUNNER_TEMP/tauri.fork-unsigned.conf.json"
+
+      - name: Build Tauri app (ad-hoc signed, no updater artifacts)
+        shell: bash
+        run: >
+          pnpm tauri build
+          --target ${{ matrix.target }}
+          --bundles dmg
+          --config "$RUNNER_TEMP/tauri.fork-unsigned.conf.json"
+
+      - name: Show bundle contents and signature
+        shell: bash
+        run: |
+          ls -la "target/${{ matrix.target }}/release/bundle/dmg"
+          codesign -dv --verbose=2 "target/${{ matrix.target }}/release/bundle/macos/"*.app 2>&1 | head -20 || true
+
+      - name: Upload disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbx-macos-${{ matrix.arch }}-dmg
+          path: target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
